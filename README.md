@@ -1,20 +1,14 @@
 # About
-Create an AI assistant with Groq AI without database.
+A function calling sample for Groq in Nodejs. Enable Groq to call an external API or custom function when needed.
 
-Blog post (Step-by-step tutorial): [Create a super fast AI assistant with Groq (Without a database)](https://serpapi.com/blog/create-super-fast-ai-assistant-with-groq)
+Blog post (step by step tutorial): [Connect Groq AI to the internet](serpapi.com/blog/connect-groq-ai-to-the-internet/)
 
 ## Run
 `nodemon index.js` or `node index.js`
 
-## Chat sample:
+## Warning
+Don't forget to create an `.env` file consists of:
 ```
-{
-  "message": "Hi, my name is Hilman, I live in Makassar, Indonesia",
-  "latestReply": "", //start adding on N+1 conversation
-  "messageSummary": ""
-}
+GROQ_API_KEY=
+SERPAPI_KEY=
 ```
-
-Flow:
-- always take the `summary response` and put it as `messageHistory`
-- pass `reply` to `latestReply`

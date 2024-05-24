@@ -1,97 +1,138 @@
 const express = require('express');
-const cors = require('cors')
 
 // Express Setup
 const app = express();
 app.use(express.json());
-app.use(cors()) // allow CORS for all origins
 const port = 3000
 
 require("dotenv").config();
-const { GROQ_API_KEY } = process.env;
+const { GROQ_API_KEY, SERPAPI_KEY } = process.env;
 
 // GROQ Setup
 const Groq = require("groq-sdk");
 const groq = new Groq({
     apiKey: GROQ_API_KEY
 });
+const model = "llama3-8b-8192"
 
 
-async function chatWithGroq(userMessage, latestReply, messageHistory) {
-    let messages = [{
-        role: "user",
-        content: userMessage
-    }]
+// Extrernal API to call
+const { getJson } = require("serpapi");
+async function getSearchResult(query) {
+    console.log('------- CALLING AN EXTERNAL API ----------') 
+    console.log('Q: ' + query)
 
-    if(messageHistory != '') {
-        messages.unshift({
-            role: "system",
-            content: `Our conversation's summary so far: """${messageHistory}""". 
-                     And this is the latest reply from you """${latestReply}"""`
-        })
+    try {
+       const json = await getJson({
+            engine: "google",
+            api_key: SERPAPI_KEY,
+            q: query,
+            location: "Austin, Texas",
+        });
+
+        return json['answer_box'];
+    } catch(e) {
+        console.log('Failed running getJson method')
+        console.log(e)
+        return
     }
+}
 
-    console.log('original message', messages)
+async function run_conversation(message) {
+
+    const messages = [
+        {
+            "role": "system",
+            "content": `You are a function calling LLM that can uses the data extracted from the getSearchResult function to answer questions that need a real time data`
+        },
+        {
+            "role": "user",
+            "content": message,
+        }
+    ]
+
+    const tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "getSearchResult",
+                "description": "Get real time data answer from Google answer box",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The query to search for in Google",
+                        }
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
 
     const chatCompletion = await groq.chat.completions.create({
         messages,
-        model: "llama3-8b-8192"
+        model,
+        tools,
+        tool_choice: "auto",
+        max_tokens: 4096
     });
 
-    const respond = chatCompletion.choices[0]?.message?.content || ""
+    const response_message = chatCompletion.choices[0]?.message
+    const tool_calls = response_message.tool_calls
+    
+    if(!tool_calls) {
+        const respond = response_message.content
+        return respond
+    }
+
+    const available_functions = {
+        "getSearchResult": getSearchResult,
+    }  // You can have multiple functions 
+
+    for(let i=0; i<tool_calls.length; i++){
+        const tool_call = tool_calls[i]
+        const functionName = tool_call.function.name
+        const functionToCall = available_functions[functionName]
+        const functionArgs = JSON.parse(tool_call.function.arguments)
+        const functionResponse = await functionToCall(
+            query=functionArgs.query
+        )
+        
+        messages.push({
+            tool_call_id: tool_call.id,
+            role: "tool",
+            name: functionName,
+            content: JSON.stringify(functionResponse)
+        })
+    }
+
+    console.log(messages)
+    
+    const second_response = await groq.chat.completions.create({
+            model,
+            messages
+        }).catch(async (err) => {
+            if (err instanceof Groq.APIError) {
+                console.log(err)
+            } else {
+                throw err;
+            }
+
+            return err
+        });
+
+    const respond = second_response.choices[0]?.message.content
     return respond
 }
 
-async function summarizeConversation(message, reply, messageSummary) {
-    let content = `Summarize this conversation 
-                    user: """${message}""",
-                    you(AI): """${reply}"""
-                  `
+app.post('/test', async (req, res) => {
+    const { message } = req.body;
+    const reply = await run_conversation(message)
 
-    // For N+1 message
-    if(messageSummary != '') {
-        content = `Summarize this conversation: """${messageSummary}"""
-                    and last conversation: 
-                    user: """${message}""",
-                    you(AI): """${reply}"""
-                `
-    }
-
-    const chatCompletion = await groq.chat.completions.create({
-        messages: [
-            {
-                role: "user",
-                content: content
-            }
-        ],
-        model: "llama3-8b-8192"
-    });
-
-    const summary = chatCompletion.choices[0]?.message?.content || ""
-    console.log('summary: ', summary)
-    return summary
-}
-
-// app.get('/', async(req, res) => {
-//   await chatWithGroq()
-//   res.send('Hello World!')
-// })
-
-app.post('/chat', async (req, res) => {
-    const { message, latestReply, messageSummary } = req.body;
-
-    console.log('message from client: ', message)
-
-    // request chat completion
-    const reply = await chatWithGroq(message, latestReply, messageSummary)
-    
-    // request chat summary
-    const summary = await summarizeConversation(message, reply, messageSummary)
-    
-    // Always return chat history/summary
     res.send({
-        reply,
-        summary
+        reply
     })
 })
 
